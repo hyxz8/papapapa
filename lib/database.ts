@@ -111,21 +111,21 @@ export const replyConfigDb = {
     return stmt.get()
   },
 
-  update(senderName: string, subject: string, content: string): boolean {
+  update(content: string): boolean {
     const db = getDb()
     const config = this.get()
 
     if (config) {
       const stmt = db.prepare(
-        "UPDATE reply_config SET sender_name = ?, subject = ?, content = ?, updated_at = ? WHERE id = ?",
+        "UPDATE reply_config SET content = ?, updated_at = ? WHERE id = ?",
       )
-      const result = stmt.run(senderName, subject, content, new Date().toISOString(), config.id)
+      const result = stmt.run(content, new Date().toISOString(), config.id)
       return result.changes > 0
     } else {
       const stmt = db.prepare(
-        "INSERT INTO reply_config (sender_name, subject, content, updated_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO reply_config (content, updated_at) VALUES (?, ?)",
       )
-      const result = stmt.run(senderName, subject, content, new Date().toISOString())
+      const result = stmt.run(content, new Date().toISOString())
       return result.changes > 0
     }
   },

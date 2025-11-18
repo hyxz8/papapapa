@@ -14,8 +14,6 @@ export interface EmailAccount {
 }
 
 export interface ReplyConfig {
-  sender_name: string
-  subject: string
   content: string
 }
 
@@ -177,7 +175,12 @@ export class EmailProcessor {
                       const messageId =
                         parsed.messageId || `${mailbox}-${Date.now()}-${seqno}`
                       const sender = parsed.from?.value?.[0]?.address || ""
+                      const senderName = parsed.from?.value?.[0]?.name || sender
                       const subject = parsed.subject || "(无主题)"
+                      const date = parsed.date || new Date()
+                      
+                      // 获取原邮件内容（优先使用文本格式）
+                      const originalContent = parsed.text || parsed.html || ""
 
                       const alreadyProcessed = await isProcessed(messageId)
                       if (alreadyProcessed) {
@@ -196,7 +199,14 @@ export class EmailProcessor {
                       )
 
                       try {
-                        await this.sendAutoReply(sender, subject)
+                        await this.sendAutoReply(
+                          sender,
+                          senderName,
+                          subject,
+                          messageId,
+                          date,
+                          originalContent,
+                        )
 
                         await markAsProcessed({
                           email_account: this.account.email,
@@ -297,7 +307,14 @@ export class EmailProcessor {
   /**
    * 发送自动回复邮件
    */
-  private async sendAutoReply(to: string, originalSubject: string): Promise<void> {
+  private async sendAutoReply(
+    to: string,
+    senderName: string,
+    originalSubject: string,
+    messageId: string,
+    originalDate: Date,
+    originalContent: string,
+  ): Promise<void> {
     const transporter = nodemailer.createTransport({
       host: this.account.smtp_server,
       port: this.account.smtp_port,
@@ -308,12 +325,108 @@ export class EmailProcessor {
       },
     })
 
-    const mailOptions = {
-      from: `"${this.replyConfig.sender_name}" <${this.account.email}>`,
+    // 构建回复主题，如果原主题已经是"回复："或"Re:"开头，则不重复添加
+    let replySubject = originalSubject
+    if (
+      !originalSubject.toLowerCase().startsWith("re:") &&
+      !originalSubject.startsWith("回复：")
+    ) {
+      replySubject = `Re：${originalSubject}`
+    }
+
+    // 格式化原邮件日期
+    const dateStr = originalDate.toLocaleString("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    })
+
+    // 格式化为标准的邮件日期格式
+    const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ]
+    const weekday = weekdays[originalDate.getDay()]
+    const day = originalDate.getDate()
+    const month = months[originalDate.getMonth()]
+    const year = originalDate.getFullYear()
+    const hours = String(originalDate.getHours()).padStart(2, "0")
+    const minutes = String(originalDate.getMinutes()).padStart(2, "0")
+    const seconds = String(originalDate.getSeconds()).padStart(2, "0")
+    const standardDateStr = `${weekday}, ${day} ${month} ${year} ${hours}:${minutes}:${seconds} +0800`
+
+    // 转换自动回复内容为 HTML（保留换行）
+    const replyContentHtml = this.replyConfig.content
+      .split("\n")
+      .map((line) => (line.trim() === "" ? "<br />" : `<div>${line}</div>`))
+      .join("\n")
+
+    // 转换原邮件内容为 HTML（保留换行）
+    const originalContentHtml = originalContent
+      .split("\n")
+      .map((line) => (line.trim() === "" ? "<br />" : line))
+      .join("<br />\n")
+
+    // 构建 HTML 格式的回复邮件
+    const htmlBody = `<div style="line-height:1.43;"><br /></div>
+<div style="font-family:-apple-system,system-ui;font-size:14px;color:rgb(0,0,0);line-height:1.43;">${replyContentHtml}</div>
+<article style="line-height:1.43;">
+<div style="display:flex;align-items:center;padding-top:8px" contenteditable="false">
+    <div style="color:#959DA6;font-size:12px;line-height:30px">原始邮件</div>
+    <hr style="border:none;flex-grow:1;border-top:1px solid rgba(21,46,74,0.07);margin-left:8px" />
+</div>
+<table style="line-height:20px;border-radius:6px;background-color:rgba(20,46,77,0.05);margin:0px;width:100%;">
+<tbody><tr><td style="line-height:20px;padding:8px;">
+<div style="line-height:20px;font-size:12px;"><span style="color:rgb(92,97,102);">发件人：</span><span style="color:rgb(0,0,0);">"${senderName}" <${to}></span></div>
+<div style="line-height:20px;font-size:12px;"><span style="color:rgb(92,97,102);">发送时间：</span><span style="color:rgb(0,0,0);">${standardDateStr}</span></div>
+<div style="line-height:20px;font-size:12px;"><span style="color:rgb(92,97,102);">收件人：</span><span style="color:rgb(0,0,0);">${this.account.email}</span></div>
+<div style="line-height:20px;font-size:12px;"><span style="color:rgb(92,97,102);">主题：</span><span style="color:rgb(0,0,0);">${originalSubject}</span></div>
+</td></tr></tbody></table>
+<div><br /></div>
+<div style="line-height:1.5;font-family:&quot;Microsoft YaHei UI&quot;;font-size:14px;color:rgb(0,0,0);">${originalContentHtml}</div>
+</article>
+<div style="line-height:1.43;"><br /></div>`
+
+    // 构建纯文本格式的回复邮件（作为备用）
+    const quotedContent = originalContent
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n")
+
+    const textBody = `${this.replyConfig.content}
+
+---
+原始邮件
+发件人："${senderName}" <${to}>
+发送时间：${standardDateStr}
+收件人：${this.account.email}
+主题：${originalSubject}
+
+${quotedContent}`
+
+    const mailOptions: any = {
+      from: this.account.email,
       to: to,
-      subject: this.replyConfig.subject,
-      text: this.replyConfig.content,
-      inReplyTo: originalSubject,
+      subject: replySubject,
+      text: textBody,
+      html: htmlBody,
+      inReplyTo: messageId,
+      references: messageId,
     }
 
     await transporter.sendMail(mailOptions)
